@@ -10,11 +10,30 @@ import {
   COMMITTED_PAYMENTS_COLUMNS,
   formatCommittedDateLabel,
   isValidIsoDate,
+  parseCommittedPaymentsCsv,
   prunePaidCommitmentRecords,
   removeCommitmentRecord,
   upsertCommitmentRecord,
   validateAppsScriptWebhookUrl,
 } from './paymentCommitments';
+
+test('reads committed payments from the live CSV, including removal of all rows', () => {
+  const header = COMMITTED_PAYMENTS_COLUMNS.join(',');
+  const csv = `${header}\n2026-11-25,Manager,"Client, Inc.",BI-01,Service,Notes,Current,"₱1,250.50",2026-11-30`;
+  assert.deepEqual(parseCommittedPaymentsCsv(csv), [{
+    timestamp: '2026-11-25',
+    accountManager: 'Manager',
+    clientName: 'Client, Inc.',
+    biNumber: 'BI-01',
+    serviceType: 'Service',
+    particulars: 'Notes',
+    aging: 'Current',
+    remainingBalance: 1250.5,
+    committedPaymentDate: '2026-11-30',
+  }]);
+  assert.deepEqual(parseCommittedPaymentsCsv(header), []);
+  assert.throws(() => parseCommittedPaymentsCsv('not,a,committed,payments,export'), /missing expected columns/);
+});
 
 test('validateAppsScriptWebhookUrl enforces strict HTTPS Google Apps Script /exec allowlist', () => {
   assert.equal(validateAppsScriptWebhookUrl('').valid, true);
@@ -61,7 +80,7 @@ test('validateAppsScriptWebhookUrl enforces strict HTTPS Google Apps Script /exe
 test('buildClientOpenInvoices returns prioritized open BIs with positive remaining balance for any client', () => {
   const csvPath = path.resolve(
     process.cwd(),
-    'public/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c'
+    'fixtures/AR_MONITORING_FOR_APPSHEET.csv'
   );
   const rawCsv = fs.readFileSync(csvPath, 'utf8');
   const parsed = parseARReportCSV(rawCsv, BASELINE_AR_DATA, BASELINE_AR_DATA.lastUpdated);

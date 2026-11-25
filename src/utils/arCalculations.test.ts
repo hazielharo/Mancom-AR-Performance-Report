@@ -99,7 +99,7 @@ test('RFC-4180 CSV parser and accounting number parser handle multi-line quotes 
 test('direct ingestion of AR_MONITORING_FOR_APPSHEET populates all 11 report page structures', () => {
   const csvPath = path.resolve(
     process.cwd(),
-    'public/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c'
+    'fixtures/AR_MONITORING_FOR_APPSHEET.csv'
   );
   const rawCsv = fs.readFileSync(csvPath, 'utf8');
   const parsed = parseARReportCSV(rawCsv, BASELINE_AR_DATA, BASELINE_AR_DATA.lastUpdated);
@@ -128,7 +128,7 @@ test('direct ingestion of AR_MONITORING_FOR_APPSHEET populates all 11 report pag
 test('pure spreadsheet manager target projection and all 9 report sheets reconcile cleanly', () => {
   const csvPath = path.resolve(
     process.cwd(),
-    'public/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c'
+    'fixtures/AR_MONITORING_FOR_APPSHEET.csv'
   );
   const rawCsv = fs.readFileSync(csvPath, 'utf8');
   const parsed = parseARReportCSV(rawCsv, BASELINE_AR_DATA, BASELINE_AR_DATA.lastUpdated);
@@ -286,7 +286,7 @@ test('dynamic Nov 1-[Date Last Updated] range updates cleanly across metrics and
 test('Page 5 invoice allocation reconciles exact required collection amount per Account Manager', () => {
   const csvPath = path.resolve(
     process.cwd(),
-    'public/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c'
+    'fixtures/AR_MONITORING_FOR_APPSHEET.csv'
   );
   const rawCsv = fs.readFileSync(csvPath, 'utf8');
   const parsed = parseARReportCSV(rawCsv, BASELINE_AR_DATA, BASELINE_AR_DATA.lastUpdated);
@@ -337,7 +337,7 @@ test('Page 5 invoice allocation reconciles exact required collection amount per 
 test('Page 5 modal filterAllocatedInvoices supports search across Client/Service Type/Particulars, dropdown filters, standard aging order, and dynamic subtotal', () => {
   const csvPath = path.resolve(
     process.cwd(),
-    'public/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c'
+    'fixtures/AR_MONITORING_FOR_APPSHEET.csv'
   );
   const rawCsv = fs.readFileSync(csvPath, 'utf8');
   const parsed = parseARReportCSV(rawCsv, BASELINE_AR_DATA, BASELINE_AR_DATA.lastUpdated);
@@ -428,7 +428,7 @@ test('Target Collection Gap formats Required and Projected Bal as ₱#,##0.00 cu
 
   const csvPath = path.resolve(
     process.cwd(),
-    'public/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c'
+    'fixtures/AR_MONITORING_FOR_APPSHEET.csv'
   );
   const rawCsv = fs.readFileSync(csvPath, 'utf8');
   const parsed = parseARReportCSV(rawCsv, BASELINE_AR_DATA, BASELINE_AR_DATA.lastUpdated);
