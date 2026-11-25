@@ -1,0 +1,37 @@
+{
+  "entities": {
+    "ReportLayout": {
+      "title": "ReportLayout",
+      "description": "Global persisted page sequence, removed page IDs, and public-hidden page IDs for the Mancom AR Executive Report.",
+      "type": "object",
+      "properties": {
+        "pageOrder": {
+          "type": "array",
+          "description": "Ordered array of valid integer report page IDs."
+        },
+        "deletedPages": {
+          "type": "array",
+          "description": "Array of integer report page IDs removed by an Admin from the visible report."
+        },
+        "hiddenPages": {
+          "type": "array",
+          "description": "Array of integer report page IDs hidden from public/non-admin viewers by an Admin."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest Admin layout update."
+        }
+      },
+      "required": ["pageOrder", "deletedPages", "hiddenPages", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/report_config/{configId}": {
+      "schema": {
+        "$ref": "#/entities/ReportLayout"
+      },
+      "description": "Publicly readable, Admin-writable global report navigation and slide layout configuration."
+    }
+  }
+}

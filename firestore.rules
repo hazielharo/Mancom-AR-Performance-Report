@@ -1,0 +1,66 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedAdmin() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'hharo@asia-affinity.com';
+    }
+
+    function isValidReportLayout(data) {
+      return data.keys().hasAll(['pageOrder', 'deletedPages', 'hiddenPages', 'updatedAt'])
+        && data.keys().hasOnly(['pageOrder', 'deletedPages', 'hiddenPages', 'updatedAt'])
+        && data.pageOrder is list
+        && data.pageOrder.size() >= 1
+        && data.pageOrder.size() <= 15
+        && data.pageOrder[0] is int
+        && data.deletedPages is list
+        && data.deletedPages.size() <= 14
+        && (data.deletedPages.size() == 0 || data.deletedPages[0] is int)
+        && data.hiddenPages is list
+        && data.hiddenPages.size() <= 14
+        && (data.hiddenPages.size() == 0 || data.hiddenPages[0] is int)
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    match /report_config/{configId} {
+      allow get: if isValidId(configId) && configId == 'layout';
+      allow list: if false;
+      allow create: if isSignedIn()
+        && isValidId(configId)
+        && configId == 'layout'
+        && isValidReportLayout(incoming())
+        && isVerifiedAdmin();
+      allow update: if isSignedIn()
+        && isValidId(configId)
+        && configId == 'layout'
+        && isValidReportLayout(incoming())
+        && isVerifiedAdmin()
+        && incoming().diff(existing()).affectedKeys().hasOnly(['pageOrder', 'deletedPages', 'hiddenPages', 'updatedAt']);
+      allow delete: if false;
+    }
+  }
+}

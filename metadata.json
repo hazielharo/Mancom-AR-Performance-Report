@@ -1,0 +1,6 @@
+{
+  "name": "Mancom AR Performance Dashboard",
+  "description": "Executive YTD October Billing, Collection Efficiency, and Post-Sept Recovery Flow dashboard for Mancom and Leadership.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
