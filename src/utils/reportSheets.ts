@@ -22,6 +22,31 @@ export interface ReportSheet {
   rows: Array<Record<string, SheetCellValue>>;
 }
 
+export function buildSupplementalArSheet(csv: string): ReportSheet {
+  const [header = [], ...body] = parseCSVRows(csv).filter((row) => row.some((cell) => cell.trim()));
+  const width = body.reduce((max, row) => Math.max(max, row.length), header.length);
+  const usedNames = new Set<string>();
+  const columns = Array.from({ length: width }, (_, index) => {
+    const name = header[index]?.trim() || `Column ${index + 1}`;
+    let uniqueName = name;
+    let suffix = 2;
+    while (usedNames.has(uniqueName)) uniqueName = `${name} (${suffix++})`;
+    usedNames.add(uniqueName);
+    return uniqueName;
+  });
+
+  return {
+    id: 'supplemental_ar',
+    sheetName: 'Supplemental AR',
+    title: 'Supplemental AR',
+    description: 'A separate read-only tab from Google Sheets. These rows are not included in dashboard totals.',
+    columns,
+    rows: body.map((row) =>
+      Object.fromEntries(columns.map((column, index) => [column, row[index] ?? '']))
+    ),
+  };
+}
+
 export const RAW_LEDGER_EXCLUDED_COLUMNS = new Set([
   'COLLEFFTAG (FOR COLL)',
   'TEMP INV #',
@@ -284,7 +309,8 @@ export function downloadAllSheetsXLSX(
 export function buildAllReportSheets(
   data: ARReportData,
   targetBenchmark: number,
-  rawCsvText?: string
+  rawCsvText?: string,
+  supplementalSheet?: ReportSheet | null
 ): ReportSheet[] {
   const clampedTarget = Math.min(100, Math.max(75, targetBenchmark));
   const managers = data.managerSummaries ?? [];
@@ -831,5 +857,6 @@ export function buildAllReportSheets(
     sheet7,
     sheet8,
     sheet9,
+    ...(supplementalSheet ? [supplementalSheet] : []),
   ];
 }

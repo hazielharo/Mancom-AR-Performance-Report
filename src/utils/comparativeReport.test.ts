@@ -27,7 +27,7 @@ test('parseComparativeMonthKey parses month-year labels chronologically', () => 
 test('extractComparativePeriods and computeComparativeSummary reconcile full YTD and narrowed period windows', () => {
   const csvPath = path.resolve(
     process.cwd(),
-    'public/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c'
+    'fixtures/AR_MONITORING_FOR_APPSHEET.csv'
   );
   const rawCsv = fs.readFileSync(csvPath, 'utf8');
   const entries = parseComparativeLedgerEntries(rawCsv);

@@ -4,7 +4,7 @@ import { Eye, EyeOff } from 'lucide-react';
 import { BASELINE_AR_DATA } from './data/baselineData';
 import { ARReportData } from './types/arReport';
 import { buildEmailDraft, computeARMetrics, parseARReportCSV } from './utils/arCalculations';
-import { buildAllReportSheets, downloadAllSheetsXLSX } from './utils/reportSheets';
+import { buildAllReportSheets, buildSupplementalArSheet, downloadAllSheetsXLSX, ReportSheet } from './utils/reportSheets';
 import { exportReportSlidesToPdf, formatReportPdfFilename } from './utils/pdfExport';
 import { exportReportSlidesToPpt, formatReportPptFilename } from './utils/pptExport';
 import {
@@ -39,9 +39,10 @@ import {
 import {
   computeSheetFingerprint,
   DEFAULT_LIVE_SHEET_CONFIG,
+  DEFAULT_MAIN_AR_SHEET_TITLE,
   DEFAULT_MAIN_AR_SHEET_GID,
   DEFAULT_MAIN_AR_SPREADSHEET_ID,
-  fetchLiveArSyncSnapshot,
+  fetchPublicSheetCsv,
   fetchSpreadsheetMetadata,
   fetchSheetValues,
   GoogleSheetsApiError,
@@ -51,6 +52,8 @@ import {
   saveServerLiveArSnapshot,
   SheetTabInfo,
   sheetValuesToCSV,
+  startSheetRefresh,
+  SUPPLEMENTAL_AR_SHEET_GID,
 } from './utils/googleSheets';
 import { ReportShellHeader, REPORT_PAGES } from './components/ReportShellHeader';
 import { ReportSidebar } from './components/ReportSidebar';
@@ -75,8 +78,11 @@ import {
   CommittedPaymentsConfig,
   CommitmentSyncStatus,
   DEFAULT_COMMITTED_PAYMENTS_CONFIG,
+  DEFAULT_COMMITTED_PAYMENTS_SHEET_GID,
+  DEFAULT_COMMITTED_PAYMENTS_SPREADSHEET_ID,
   deleteCommittedPayment,
   fetchCommittedPayments,
+  parseCommittedPaymentsCsv,
   PaymentCommitmentRecord,
   prunePaidCommitmentRecords,
   runCommittedPaymentsCleanup,
@@ -88,7 +94,6 @@ import {
 const STORAGE_KEY = 'mancom_ar_custom_data_v4';
 const RAW_CSV_STORAGE_KEY = 'mancom_ar_custom_csv_v4';
 const LIVE_SHEET_CONFIG_KEY = 'mancom_ar_sheet_config_v1';
-const LINKED_SPREADSHEET_URL = '/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c';
 
 function formatSyncTimestamp(isoOrDate?: string): string {
   const dt = isoOrDate ? new Date(isoOrDate) : new Date();
@@ -196,17 +201,24 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [sheetConfig, setSheetConfig] = useState<LiveSheetConfig | null>(savedConfig);
   const [syncStatus, setSyncStatus] = useState<LiveSyncStatus>('syncing');
-  const [autoSyncStatus, setAutoSyncStatus] = useState<'syncing' | 'synced' | 'error'>('syncing');
+  const [autoSyncStatus, setAutoSyncStatus] = useState<'syncing' | 'synced' | 'paused' | 'error'>('syncing');
   const [syncError, setSyncError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   const isSyncingRef = useRef(false);
   const lastFingerprintRef = useRef<string | null>(null);
+  const publicArRequestRef = useRef<{ controller: AbortController; signal: AbortSignal } | null>(null);
+  const publicArCsvRef = useRef<string | null>(null);
+  const supplementalCsvRef = useRef<string | null>(null);
+  const paymentsCsvRef = useRef<string | null>(null);
+  const [supplementalSheet, setSupplementalSheet] = useState<ReportSheet | null>(null);
+  const [publicCommitments, setPublicCommitments] = useState<PaymentCommitmentRecord[] | null>(null);
   const reportDataRef = useRef<ARReportData>(reportData);
   reportDataRef.current = reportData;
 
   // Committed Payments state & Google Apps Script two-way sync
   const [commitments, setCommitments] = useState<PaymentCommitmentRecord[]>([]);
+  const displayedCommitments = publicCommitments ?? commitments;
   const [committedPaymentsConfig, setCommittedPaymentsConfig] =
     useState<CommittedPaymentsConfig>(DEFAULT_COMMITTED_PAYMENTS_CONFIG);
   const [commitmentSyncStatus, setCommitmentSyncStatus] =
@@ -251,6 +263,7 @@ export default function App() {
 
   // Auto-remove any committed BI whose remaining balance is now <= 0 whenever openInvoices updates
   useEffect(() => {
+    if (!adminTokenRef.current) return;
     const openInvs = reportData.openInvoices;
     if (!openInvs || openInvs.length === 0) return;
     if (commitmentsRef.current.length === 0) return;
@@ -345,76 +358,92 @@ export default function App() {
     };
   }, []);
 
-  const runServerAutoSync = useCallback(async (force = false) => {
-    setAutoSyncStatus('syncing');
+  const refreshPublicAr = useCallback(async (force = false, signal?: AbortSignal) => {
+    if (!force && reportDataRef.current.sourceFormat === 'manual') {
+      setSyncStatus('disconnected');
+      setAutoSyncStatus('paused');
+      return;
+    }
+    if (publicArRequestRef.current && !publicArRequestRef.current.signal.aborted) {
+      if (!force) return;
+      publicArRequestRef.current.controller.abort();
+    }
+    const controller = new AbortController();
+    const requestSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    publicArRequestRef.current = { controller, signal: requestSignal };
     if (force) {
+      setAutoSyncStatus('syncing');
       setSyncStatus('syncing');
       setSyncError(null);
     }
     try {
-      const resp = await fetchLiveArSyncSnapshot(force);
-      const syncedLabel = formatSyncTimestamp(resp.syncedAt);
-      const timestampForData =
-        resp.source === 'linked_snapshot' ? BASELINE_AR_DATA.lastUpdated : syncedLabel;
+      const csv = await fetchPublicSheetCsv(DEFAULT_MAIN_AR_SPREADSHEET_ID, DEFAULT_MAIN_AR_SHEET_GID, requestSignal);
+      if (requestSignal.aborted) return;
+      if (!force && reportDataRef.current.sourceFormat === 'manual') return;
 
-      const skipOverwriteManual =
-        !force && reportDataRef.current.sourceFormat === 'manual';
-
-      if (!skipOverwriteManual && resp.csv.trim()) {
-        const parsed = parseARReportCSV(resp.csv, BASELINE_AR_DATA, timestampForData);
-        if (parsed.ok && parsed.data) {
-          setRawCsvText(resp.csv);
-          setReportData(parsed.data);
-          if (force) {
-            setIsCustomData(false);
-            try {
-              localStorage.removeItem(STORAGE_KEY);
-              localStorage.removeItem(RAW_CSV_STORAGE_KEY);
-            } catch {
-              // Ignore storage errors
-            }
-          }
+      if (force || csv !== publicArCsvRef.current) {
+        const syncedLabel = formatSyncTimestamp();
+        const parsed = parseARReportCSV(csv, BASELINE_AR_DATA, syncedLabel);
+        if (!parsed.ok || !parsed.data) {
+          throw new Error(parsed.errors[0] ?? 'The live export is not an AR Monitoring CSV.');
+        }
+        publicArCsvRef.current = csv;
+        setRawCsvText(csv);
+        setReportData(parsed.data);
+        setIsCustomData(false);
+        setLastSyncedAt(syncedLabel);
+        if (force) {
+          try {
+            localStorage.removeItem(STORAGE_KEY);
+            localStorage.removeItem(RAW_CSV_STORAGE_KEY);
+          } catch {}
         }
       }
-
-      setLastSyncedAt(syncedLabel);
+      setSyncStatus('live');
+      setSyncError(null);
       setAutoSyncStatus('synced');
-      if (resp.liveSheetAccessible) {
-        setSyncStatus('live');
-      } else {
-        setSyncStatus((prev) =>
-          prev === 'syncing' ? 'disconnected' : prev
-        );
-      }
-      return resp;
-    } catch {
-      // Fall back quietly to bundled snapshot so initial render never breaks
-      try {
-        const res = await fetch(LINKED_SPREADSHEET_URL);
-        const text = res.ok ? await res.text() : '';
-        if (text.trim()) {
-          setRawCsvText(text);
-          const parsed = parseARReportCSV(text, BASELINE_AR_DATA, BASELINE_AR_DATA.lastUpdated);
-          if (parsed.ok && parsed.data) {
-            setReportData(parsed.data);
-          }
-        }
-      } catch {
-        // Retain statically compiled baseline
-      }
-      setLastSyncedAt(formatSyncTimestamp());
-      setAutoSyncStatus('synced');
-      setSyncStatus('disconnected');
-      return null;
+    } catch (error) {
+      if (requestSignal.aborted || (!force && (publicArCsvRef.current !== null || reportDataRef.current.sourceFormat === 'manual'))) return;
+      setSyncStatus('error');
+      setAutoSyncStatus('error');
+      setSyncError(error instanceof Error ? error.message : 'Unable to read the live AR sheet.');
+    } finally {
+      if (publicArRequestRef.current?.controller === controller) publicArRequestRef.current = null;
     }
   }, []);
 
-  // Automatic background read-only AR sync on every app open (for both Admin & Public Viewers)
+  const refreshSupplementalSheets = useCallback(async (signal?: AbortSignal) => {
+    await Promise.allSettled([
+      fetchPublicSheetCsv(DEFAULT_MAIN_AR_SPREADSHEET_ID, SUPPLEMENTAL_AR_SHEET_GID, signal).then((csv) => {
+        if (signal?.aborted || csv === supplementalCsvRef.current) return;
+        const sheet = buildSupplementalArSheet(csv);
+        supplementalCsvRef.current = csv;
+        setSupplementalSheet(sheet);
+      }),
+      fetchPublicSheetCsv(DEFAULT_COMMITTED_PAYMENTS_SPREADSHEET_ID, DEFAULT_COMMITTED_PAYMENTS_SHEET_GID, signal).then((csv) => {
+        if (signal?.aborted || csv === paymentsCsvRef.current) return;
+        const records = parseCommittedPaymentsCsv(csv);
+        paymentsCsvRef.current = csv;
+        setPublicCommitments(records);
+      }),
+    ]);
+  }, []);
+
+  const usePublicAr = !accessToken || !sheetConfig;
   useEffect(() => {
-    void runServerAutoSync(false);
-  }, [runServerAutoSync]);
+    return startSheetRefresh((signal) => Promise.all([
+      usePublicAr ? refreshPublicAr(false, signal) : undefined,
+      refreshSupplementalSheets(signal),
+    ]));
+  }, [usePublicAr, refreshPublicAr, refreshSupplementalSheets]);
 
   const applyDataToState = useCallback((updated: ARReportData, uploadedCsv?: string) => {
+    reportDataRef.current = updated;
+    publicArCsvRef.current = null;
+    if (updated.sourceFormat === 'manual') {
+      setSyncStatus('disconnected');
+      setAutoSyncStatus('paused');
+    }
     setReportData(updated);
     setIsCustomData(true);
     const nextCsv = uploadedCsv ?? '';
@@ -435,8 +464,10 @@ export default function App() {
     async (
       configToSync: LiveSheetConfig,
       tokenOverride?: string | null,
-      forceApply = false
+      forceApply = false,
+      signal?: AbortSignal
     ) => {
+      if (!forceApply && reportDataRef.current.sourceFormat === 'manual') return;
       const token = tokenOverride ?? accessToken ?? getAccessToken();
       if (!token) {
         setSyncStatus('auth_required');
@@ -445,16 +476,20 @@ export default function App() {
       if (isSyncingRef.current) return;
 
       isSyncingRef.current = true;
-      setSyncStatus('syncing');
-      setAutoSyncStatus('syncing');
-      setSyncError(null);
+      if (forceApply) {
+        setSyncStatus('syncing');
+        setAutoSyncStatus('syncing');
+        setSyncError(null);
+      }
 
       try {
         const values = await fetchSheetValues(
           configToSync.spreadsheetId,
           configToSync.sheetTitle,
-          token
+          token,
+          signal
         );
+        if (signal?.aborted || (!forceApply && reportDataRef.current.sourceFormat === 'manual')) return;
         const fingerprint = computeSheetFingerprint(values);
         const nowTs = formatSyncTimestamp();
 
@@ -469,6 +504,7 @@ export default function App() {
           }
           lastFingerprintRef.current = fingerprint;
           applyDataToState(parsed.data, csv);
+          setLastSyncedAt(nowTs);
 
           if (adminTokenRef.current) {
             void saveServerLiveArSnapshot(
@@ -483,10 +519,11 @@ export default function App() {
           }
         }
 
-        setLastSyncedAt(nowTs);
         setSyncStatus('live');
+        setSyncError(null);
         setAutoSyncStatus('synced');
       } catch (err: any) {
+        if (signal?.aborted) return;
         if (err instanceof GoogleSheetsApiError && (err.status === 401 || err.status === 403)) {
           clearCachedAccessToken();
           setAccessToken(null);
@@ -500,7 +537,7 @@ export default function App() {
           setSyncStatus('error');
           setSyncError(err?.message || 'Failed to sync rows from Google Sheets.');
         }
-        setAutoSyncStatus('synced');
+        setAutoSyncStatus('error');
         throw err;
       } finally {
         isSyncingRef.current = false;
@@ -509,36 +546,22 @@ export default function App() {
     [accessToken, applyDataToState]
   );
 
-  // Real-time auto-refresh timer & focus revalidation whenever Live Google Sheets is connected
   useEffect(() => {
     if (!sheetConfig || !accessToken) return;
-
-    const triggerBackgroundSync = () => {
-      void syncLiveSheet(sheetConfig, accessToken, false).catch(() => {
-        // Error state is handled inside syncLiveSheet
-      });
-    };
-
-    const intervalId =
-      sheetConfig.pollIntervalSec > 0
-        ? window.setInterval(triggerBackgroundSync, sheetConfig.pollIntervalSec * 1000)
-        : null;
-
-    const onVisibilityOrFocus = () => {
-      if (document.visibilityState === 'visible') {
-        triggerBackgroundSync();
-      }
-    };
-
-    window.addEventListener('focus', onVisibilityOrFocus);
-    document.addEventListener('visibilitychange', onVisibilityOrFocus);
-
-    return () => {
-      if (intervalId !== null) window.clearInterval(intervalId);
-      window.removeEventListener('focus', onVisibilityOrFocus);
-      document.removeEventListener('visibilitychange', onVisibilityOrFocus);
-    };
+    return startSheetRefresh(
+      (signal) => syncLiveSheet(sheetConfig, accessToken, false, signal),
+      sheetConfig.pollIntervalSec,
+    );
   }, [sheetConfig, accessToken, syncLiveSheet]);
+
+  const handleSyncNow = async () => {
+    await Promise.all([
+      accessToken && sheetConfig
+        ? syncLiveSheet(sheetConfig, accessToken, true).catch(() => {})
+        : refreshPublicAr(true),
+      refreshSupplementalSheets(),
+    ]);
+  };
 
   const handleGoogleSignIn = async () => {
     setIsLoggingIn(true);
@@ -865,6 +888,7 @@ export default function App() {
 
   const handleResetBaseline = () => {
     handleDisconnectLiveSheet();
+    publicArCsvRef.current = null;
     setReportData(BASELINE_AR_DATA);
     setRawCsvText('');
     setIsCustomData(false);
@@ -875,11 +899,11 @@ export default function App() {
     } catch {
       // Ignore storage errors
     }
-    void runServerAutoSync(true);
+    void refreshPublicAr(true);
   };
 
   const handleDownloadAllSheets = () => {
-    const sheets = buildAllReportSheets(reportData, targetBenchmark, rawCsvText);
+    const sheets = buildAllReportSheets(reportData, targetBenchmark, rawCsvText, supplementalSheet);
     downloadAllSheetsXLSX(sheets);
   };
 
@@ -986,10 +1010,11 @@ export default function App() {
     }
   }, []);
 
-  const liveSheetLabel =
-    sheetConfig && (syncStatus === 'live' || syncStatus === 'syncing')
-      ? `${sheetConfig.spreadsheetTitle} (${sheetConfig.sheetTitle})`
-      : null;
+  const liveSheetLabel = syncStatus !== 'live'
+    ? null
+    : usePublicAr
+      ? DEFAULT_MAIN_AR_SHEET_TITLE
+      : `${sheetConfig.spreadsheetTitle} (${sheetConfig.sheetTitle})`;
 
   const renderPage = (pageNum: number) => {
     switch (pageNum) {
@@ -1055,9 +1080,9 @@ export default function App() {
           <BalanceBreakdownPage
             key={11}
             data={reportData}
-            commitments={commitments}
+            commitments={displayedCommitments}
             committedPaymentsConfig={committedPaymentsConfig}
-            commitmentSyncStatus={commitmentSyncStatus}
+            commitmentSyncStatus={publicCommitments && commitmentSyncStatus === 'local_only' ? 'synced' : commitmentSyncStatus}
             commitmentSyncWarning={commitmentSyncWarning}
             onUpsertCommitment={handleUpsertCommitment}
             onDeleteCommitment={handleDeleteCommitment}
@@ -1084,6 +1109,7 @@ export default function App() {
             rawCsvText={rawCsvText}
             isCustomData={isCustomData}
             liveSheetLabel={liveSheetLabel}
+            supplementalSheet={supplementalSheet}
           />
         );
       default:
@@ -1141,14 +1167,7 @@ export default function App() {
         lastSyncedAt={lastSyncedAt}
         sheetConfig={sheetConfig}
         onOpenLiveSheets={() => handleOpenManageDrawer('sheets')}
-        onSyncNow={() => {
-          if (accessToken && sheetConfig) {
-            void syncLiveSheet(sheetConfig, accessToken, true).catch(() => {});
-          } else {
-            void runServerAutoSync(true);
-          }
-          void handleSyncCommitments().catch(() => {});
-        }}
+        onSyncNow={() => void handleSyncNow()}
         onResetToBaseline={handleResetBaseline}
         onOpenManageData={() => handleOpenManageDrawer('sheets')}
         onOpenExportSummary={() => setIsExportModalOpen(true)}
@@ -1266,7 +1285,7 @@ export default function App() {
           syncStatus={syncStatus}
           syncError={syncError}
           lastSyncedAt={lastSyncedAt}
-          commitments={commitments}
+          commitments={displayedCommitments}
           committedPaymentsConfig={committedPaymentsConfig}
           commitmentSyncStatus={commitmentSyncStatus}
           commitmentSyncWarning={commitmentSyncWarning}
@@ -1276,14 +1295,7 @@ export default function App() {
           onGoogleSignOut={handleGoogleSignOut}
           onLoadSpreadsheetTabs={handleLoadSpreadsheetTabs}
           onConnectLiveSheet={handleConnectLiveSheet}
-          onSyncNow={async () => {
-            if (accessToken && sheetConfig) {
-              await syncLiveSheet(sheetConfig, accessToken, true);
-            } else {
-              await runServerAutoSync(true);
-            }
-            await handleSyncCommitments().catch(() => {});
-          }}
+          onSyncNow={handleSyncNow}
           onDisconnectLiveSheet={handleDisconnectLiveSheet}
           onClose={() => setIsManageDrawerOpen(false)}
           onApplyData={handleApplyData}

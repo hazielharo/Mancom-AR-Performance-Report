@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
+  CircleAlert,
   ChevronDown,
   Download,
   Eye,
@@ -58,7 +59,7 @@ interface ReportShellHeaderProps {
   onTargetBenchmarkChange: (value: number) => void;
   isCustomData: boolean;
   syncStatus: LiveSyncStatus;
-  autoSyncStatus?: 'syncing' | 'synced' | 'error';
+  autoSyncStatus?: 'syncing' | 'synced' | 'paused' | 'error';
   lastSyncedAt?: string | null;
   sheetConfig: LiveSheetConfig | null;
   onOpenLiveSheets: () => void;
@@ -179,6 +180,22 @@ export const ReportShellHeader: React.FC<ReportShellHeaderProps> = ({
     const parts = lastSyncedAt.split(',');
     return (parts[parts.length - 1] ?? lastSyncedAt).trim();
   })();
+  const isRefreshing = autoSyncStatus === 'syncing' || syncStatus === 'syncing';
+  const isSyncInactive = autoSyncStatus === 'error' || autoSyncStatus === 'paused';
+  const syncBadgeText = isRefreshing
+    ? 'Syncing...'
+    : autoSyncStatus === 'error'
+      ? 'Live sheet unavailable'
+      : autoSyncStatus === 'paused'
+        ? 'Sync paused'
+        : compactSyncTime ? `Synced · ${compactSyncTime}` : 'Synced';
+  const syncBadgeTitle = isRefreshing
+    ? 'Automatically syncing read-only AR Monitoring data...'
+    : autoSyncStatus === 'error'
+      ? 'Live AR Monitoring is unavailable. The dashboard is showing the last available report.'
+      : autoSyncStatus === 'paused'
+        ? 'Automatic AR updates are paused while manual data is active.'
+        : lastSyncedAt ? `Auto-synced from the linked AR Monitoring sheet · ${lastSyncedAt}` : syncBadgeText;
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-sm print:hidden">
@@ -241,33 +258,23 @@ export const ReportShellHeader: React.FC<ReportShellHeaderProps> = ({
           <span
             data-testid="header-sync-badge"
             role="status"
-            title={
-              autoSyncStatus === 'syncing'
-                ? 'Automatically syncing read-only AR Monitoring data...'
-                : lastSyncedAt
-                  ? `Auto-synced from Main AR Monitoring sheet · ${lastSyncedAt}`
-                  : 'Auto-synced with linked AR Monitoring source'
-            }
+            title={syncBadgeTitle}
             className={`hidden sm:inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium whitespace-nowrap tabular-nums shrink-0 ${
-              autoSyncStatus === 'syncing' || syncStatus === 'syncing'
+              isRefreshing
                 ? 'border-amber-200 bg-amber-50/90 text-amber-800'
-                : autoSyncStatus === 'error'
+                : isSyncInactive
                   ? 'border-slate-200 bg-slate-50 text-slate-600'
                   : 'border-emerald-200 bg-emerald-50/85 text-emerald-800'
             }`}
           >
-            {autoSyncStatus === 'syncing' || syncStatus === 'syncing' ? (
+            {isRefreshing ? (
               <RefreshCw className="h-3 w-3 animate-spin text-amber-700" aria-hidden="true" />
+            ) : isSyncInactive ? (
+              <CircleAlert className="h-3 w-3" aria-hidden="true" />
             ) : (
               <CheckCircle2 className="h-3 w-3 text-emerald-600" aria-hidden="true" />
             )}
-            <span>
-              {autoSyncStatus === 'syncing' || syncStatus === 'syncing'
-                ? 'Syncing...'
-                : compactSyncTime
-                  ? `Synced · ${compactSyncTime}`
-                  : 'Synced'}
-            </span>
+            <span>{syncBadgeText}</span>
           </span>
 
           <span

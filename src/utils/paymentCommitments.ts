@@ -1,5 +1,5 @@
 import { ARLineItem, OpenInvoiceItem } from '../types/arReport';
-import { COLLECTION_PRIORITY_ORDER, round2 } from './arCalculations';
+import { COLLECTION_PRIORITY_ORDER, parseAccountingNumber, parseCSVRows, round2 } from './arCalculations';
 
 export const DEFAULT_MAIN_AR_SOURCE_SPREADSHEET_ID =
   '1exqZWTrc736kC5IB7PUYtDiJdk3SqnFEnQ7-NaTCUzg';
@@ -77,6 +77,23 @@ export interface UpsertCommitmentInput {
 
 export function normalizeBiKey(biNumber: string | undefined | null): string {
   return (biNumber ?? '').trim().toUpperCase();
+}
+
+export function parseCommittedPaymentsCsv(csv: string): PaymentCommitmentRecord[] {
+  const [header = [], ...rows] = parseCSVRows(csv);
+  const names = header.map((column) => column.trim().toLowerCase());
+  const positions = COMMITTED_PAYMENTS_COLUMNS.map((column) => names.indexOf(column.toLowerCase()));
+  if (positions.some((position) => position < 0)) {
+    throw new Error('The committed payments export is missing expected columns.');
+  }
+
+  return rows.flatMap((row) => {
+    const [timestamp, accountManager, clientName, biNumber, serviceType, particulars, aging, balance, committedPaymentDate] =
+      positions.map((position) => row[position]?.trim() ?? '');
+    const remainingBalance = parseAccountingNumber(balance);
+    if (!biNumber || !committedPaymentDate || !Number.isFinite(remainingBalance)) return [];
+    return [{ timestamp, accountManager, clientName, biNumber, serviceType, particulars, aging, remainingBalance, committedPaymentDate }];
+  });
 }
 
 export function validateAppsScriptWebhookUrl(rawUrl: string): {

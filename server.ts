@@ -47,7 +47,7 @@ const COMMITMENTS_CONFIG_FILE_PATH = path.resolve(DATA_DIR, 'committed-payments-
 const LIVE_AR_CACHE_FILE_PATH = path.resolve(DATA_DIR, 'live-ar-cache.json');
 const BUNDLED_SNAPSHOT_CSV_PATH = path.resolve(
   process.cwd(),
-  'public/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c'
+  'fixtures/AR_MONITORING_FOR_APPSHEET.csv'
 );
 
 interface AdminTokenPayload {

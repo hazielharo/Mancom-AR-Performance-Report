@@ -29,9 +29,11 @@ import {
   DEFAULT_MAIN_AR_SHEET_GID,
   DEFAULT_MAIN_AR_SPREADSHEET_ID,
   extractSpreadsheetId,
+  fetchPublicSheetCsv,
   LiveSheetConfig,
   LiveSyncStatus,
   SheetTabInfo,
+  SHEET_REFRESH_INTERVAL_SEC,
 } from '../utils/googleSheets';
 import {
   buildAppsScriptCode,
@@ -122,6 +124,7 @@ export const ManageDataDrawer: React.FC<ManageDataDrawerProps> = ({
   onResetBaseline,
 }) => {
   const [activeTab, setActiveTab] = useState<DrawerTab>(initialTab);
+  const activePollInterval = hasAccessToken ? sheetConfig?.pollIntervalSec ?? 0 : SHEET_REFRESH_INTERVAL_SEC;
   const novEndDay = getLastUpdatedDay(data.lastUpdated);
 
   // Live Google Sheets form state (pre-filled with hardcoded read-only Main AR Monitoring source)
@@ -330,15 +333,11 @@ export const ManageDataDrawer: React.FC<ManageDataDrawerProps> = ({
     setIsLoadingSourceFile(true);
     setFormErrors([]);
     try {
-      const resp = await fetch('/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c');
-      if (!resp.ok) {
-        throw new Error('Could not fetch bundled AppSheet CSV source.');
-      }
-      const text = await resp.text();
+      const text = await fetchPublicSheetCsv(DEFAULT_MAIN_AR_SPREADSHEET_ID, DEFAULT_MAIN_AR_SHEET_GID);
       setCsvRawContent(text);
       setUploadedFileName('AR_MONITORING_FOR_APPSHEET.csv');
-    } catch {
-      setFormErrors(['Unable to load the bundled AppSheet CSV source file.']);
+    } catch (error) {
+      setFormErrors([error instanceof Error ? error.message : 'Unable to load the live AppSheet CSV.']);
     } finally {
       setIsLoadingSourceFile(false);
     }
@@ -821,8 +820,8 @@ export const ManageDataDrawer: React.FC<ManageDataDrawerProps> = ({
                           ? 'Fetching latest read-only AR rows...'
                           : syncStatus === 'live'
                             ? `Auto-sync active${
-                                sheetConfig.pollIntervalSec > 0
-                                  ? ` · Background refresh every ${sheetConfig.pollIntervalSec}s`
+                                activePollInterval > 0
+                                  ? ` · Background refresh every ${activePollInterval}s`
                                   : ''
                               }${lastSyncedAt ? ` · Last synced ${lastSyncedAt}` : ''}`
                             : `Pre-linked GID ${sheetConfig.sheetGid ?? DEFAULT_MAIN_AR_SHEET_GID}${

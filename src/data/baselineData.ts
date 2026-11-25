@@ -1,6 +1,6 @@
 import { ARReportData } from "../types/arReport";
 
-// Derived directly from public/assets/aistudio/AR_MONITORING_FOR_APPSHEET_c88dcd7c
+// Derived directly from fixtures/AR_MONITORING_FOR_APPSHEET.csv
 export const BASELINE_AR_DATA: ARReportData = {
   "title": "Mancom & Leadership Performance Update",
   "subtitle": "YTD October Billing & Collection Efficiency",

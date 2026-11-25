@@ -1,6 +1,8 @@
 export const DEFAULT_MAIN_AR_SPREADSHEET_ID =
   '1exqZWTrc736kC5IB7PUYtDiJdk3SqnFEnQ7-NaTCUzg';
 export const DEFAULT_MAIN_AR_SHEET_GID = 975333387;
+export const SUPPLEMENTAL_AR_SHEET_GID = 1382424642;
+export const SHEET_REFRESH_INTERVAL_SEC = 30;
 export const DEFAULT_MAIN_AR_SHEET_TITLE = 'AR_MONITORING_FOR_APPSHEET';
 export const DEFAULT_MAIN_AR_SPREADSHEET_TITLE =
   'Main AR Monitoring (Read-Only Source)';
@@ -37,7 +39,7 @@ export const DEFAULT_LIVE_SHEET_CONFIG: LiveSheetConfig = {
       title: DEFAULT_MAIN_AR_SHEET_TITLE,
     },
   ],
-  pollIntervalSec: 30,
+  pollIntervalSec: SHEET_REFRESH_INTERVAL_SEC,
 };
 
 export type LiveSyncStatus =
@@ -46,17 +48,6 @@ export type LiveSyncStatus =
   | 'syncing'
   | 'live'
   | 'error';
-
-export interface LiveArSyncResponse {
-  ok: boolean;
-  csv: string;
-  syncedAt: string;
-  source: 'google_sheets_csv' | 'apps_script' | 'admin_live_sync' | 'linked_snapshot';
-  liveSheetAccessible: boolean;
-  spreadsheetId: string;
-  sheetGid: number;
-  warning?: string;
-}
 
 export class GoogleSheetsApiError extends Error {
   status: number;
@@ -77,6 +68,77 @@ export function buildPublicSheetCsvUrl(
       ? `&gid=${Math.trunc(gid)}`
       : '';
   return `https://docs.google.com/spreadsheets/d/${cleanId}/export?format=csv${gidParam}`;
+}
+
+export async function fetchPublicSheetCsv(
+  spreadsheetId: string,
+  gid: number,
+  signal?: AbortSignal
+): Promise<string> {
+  const exportUrl = buildPublicSheetCsvUrl(spreadsheetId, gid);
+  const gvizUrl = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId.trim())}/gviz/tq?tqx=out:csv&headers=1&gid=${gid}`;
+  let error: unknown;
+  let accessError: GoogleSheetsApiError | undefined;
+  for (const url of [exportUrl, gvizUrl]) {
+    signal?.throwIfAborted();
+    try {
+      const timeout = AbortSignal.timeout(12_000);
+      const response = await fetch(`${url}&cb=${Date.now()}`, {
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      });
+      if (response.status === 401 || response.status === 403) {
+        accessError = new GoogleSheetsApiError('Google Sheets has not granted signed-out access to this export.', response.status);
+        continue;
+      }
+      if (!response.ok) {
+        throw new GoogleSheetsApiError(`Google Sheets CSV is unavailable (HTTP ${response.status}).`, response.status);
+      }
+      const csv = await response.text();
+      if (response.headers.get('Content-Type')?.includes('text/html') || /^\s*(<|\/\*O_o\*\/|google\.visualization\.)/.test(csv)) {
+        throw new Error('Google Sheets returned a page instead of a CSV export.');
+      }
+      return csv;
+    } catch (caught) {
+      signal?.throwIfAborted();
+      error = caught;
+    }
+  }
+  throw accessError ?? (error instanceof Error ? error : new Error('Google Sheets CSV is unavailable.'));
+}
+
+export function startSheetRefresh(
+  refresh: (signal: AbortSignal) => Promise<unknown>,
+  intervalSec = SHEET_REFRESH_INTERVAL_SEC
+): () => void {
+  const controller = new AbortController();
+  let refreshing = false;
+  const trigger = async () => {
+    if (refreshing || controller.signal.aborted) return;
+    refreshing = true;
+    try {
+      await refresh(controller.signal);
+    } finally {
+      refreshing = false;
+    }
+  };
+  const requestRefresh = () => { void trigger().catch(() => {}); };
+  const refreshWhenVisible = () => {
+    if (document.visibilityState === 'visible') requestRefresh();
+  };
+  const interval = intervalSec > 0 ? window.setInterval(requestRefresh, intervalSec * 1000) : null;
+
+  window.addEventListener('focus', refreshWhenVisible);
+  document.addEventListener('visibilitychange', refreshWhenVisible);
+  requestRefresh();
+
+  return () => {
+    controller.abort();
+    if (interval !== null) window.clearInterval(interval);
+    window.removeEventListener('focus', refreshWhenVisible);
+    document.removeEventListener('visibilitychange', refreshWhenVisible);
+  };
 }
 
 /**
@@ -203,6 +265,7 @@ export async function fetchSpreadsheetMetadata(
   )}?fields=properties.title,sheets.properties(sheetId,title)`;
 
   const res = await fetch(url, {
+    cache: 'no-store',
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 
@@ -234,7 +297,8 @@ export async function fetchSpreadsheetMetadata(
 export async function fetchSheetValues(
   spreadsheetId: string,
   sheetTitle: string,
-  accessToken: string
+  accessToken: string,
+  signal?: AbortSignal
 ): Promise<unknown[][]> {
   const escapedTab = `'${sheetTitle.replace(/'/g, "''")}'`;
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
@@ -242,7 +306,9 @@ export async function fetchSheetValues(
   )}/values/${encodeURIComponent(escapedTab)}?valueRenderOption=FORMATTED_VALUE`;
 
   const res = await fetch(url, {
+    cache: 'no-store',
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal,
   });
 
   if (!res.ok) {
@@ -255,20 +321,6 @@ export async function fetchSheetValues(
 
   const data = await res.json();
   return Array.isArray(data?.values) ? data.values : [];
-}
-
-export async function fetchLiveArSyncSnapshot(
-  force = false
-): Promise<LiveArSyncResponse> {
-  const res = await fetch(
-    `/api/live-ar-sync${force ? '?force=1' : ''}`,
-    { cache: 'no-store' }
-  );
-  const data = (await res.json()) as LiveArSyncResponse & { error?: string };
-  if (!res.ok || !data.ok) {
-    throw new Error(data?.error || `Live AR sync failed (HTTP ${res.status}).`);
-  }
-  return data;
 }
 
 export async function saveServerLiveArSnapshot(

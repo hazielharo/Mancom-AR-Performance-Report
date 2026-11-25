@@ -32,6 +32,7 @@ interface DataSheetsPageProps {
   rawCsvText: string;
   isCustomData: boolean;
   liveSheetLabel?: string | null;
+  supplementalSheet?: ReportSheet | null;
 }
 
 const PAGE_SIZE = 50;
@@ -42,10 +43,11 @@ export const DataSheetsPage: React.FC<DataSheetsPageProps> = ({
   rawCsvText,
   isCustomData,
   liveSheetLabel,
+  supplementalSheet,
 }) => {
   const sheets: ReportSheet[] = useMemo(
-    () => buildAllReportSheets(data, targetBenchmark, rawCsvText),
-    [data, targetBenchmark, rawCsvText]
+    () => buildAllReportSheets(data, targetBenchmark, rawCsvText, supplementalSheet),
+    [data, targetBenchmark, rawCsvText, supplementalSheet]
   );
 
   const [selectedSheetId, setSelectedSheetId] = useState<string>(sheets[0]?.id ?? 'exec_summary');
